@@ -1,0 +1,93 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Resources:
+  myS3BucketTarget:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: dynamodb-bucket-yordan-target
+  myDynamoDBTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      AttributeDefinitions:
+        -
+          AttributeName: "Album"
+          AttributeType: "S"
+        -
+          AttributeName: "Artist"
+          AttributeType: "S"
+      KeySchema:
+        -
+          AttributeName: "Album"
+          KeyType: "HASH"
+        -
+          AttributeName: "Artist"
+          KeyType: "RANGE"
+      ProvisionedThroughput:
+        ReadCapacityUnits: "2"
+        WriteCapacityUnits: "2"
+      TimeToLiveSpecification:
+        AttributeName: "TTLAttribute"
+        Enabled: "True"
+      StreamSpecification:
+        StreamViewType: "NEW_AND_OLD_IMAGES"
+      TableName: ArtistsTable
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+        - Effect: "Allow"
+          Principal:
+            Service:
+            - lambda.amazonaws.com
+          Action:
+          - "sts:AssumeRole"
+      Path: "/"
+      # Create a policy attached to the role
+      # Allow Cloudwatch logging
+      Policies:
+      - PolicyName: "AllowLogging"
+        PolicyDocument:
+          Version: "2012-10-17"
+          Statement:
+          - Effect: "Allow"
+            Action:
+              - "dynamodb:DescribeStream"
+              - "dynamodb:GetRecords"
+              - "dynamodb:GetShardIterator"
+              - "dynamodb:ListStreams"
+              - "logs:CreateLogGroup"
+              - "logs:CreateLogStream"
+              - "logs:PutLogEvents"
+              - "s3:*"
+              - "s3-object-lambda:*"
+            Resource: "*"
+  LambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: dynamodb_exp_data_function
+      Description: A function that saves expired or deleted data from DynamoDb
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Runtime: python3.9
+      Handler: index.lambda_handler
+      Code:
+        ZipFile:  |
+          import json
+          import boto3
+          import urllib.request as req
+
+
+          def lambda_handler(event, context):
+              bucket = "dynamodb-bucket-yordan-target"
+              filename = "dynamodb_expired_data.json"
+              result = []
+              for record in event['Records']:
+                  if record['eventName'] in ['REMOVE', 'MODIFY']:
+                      result.append(record)
+
+              s3 = boto3.resource('s3')
+              s3object = s3.Object(bucket, filename)
+
+              s3object.put(
+                  Body=(bytes(json.dumps(result).encode('UTF-8')))
+              )
