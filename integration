@@ -1,0 +1,60 @@
+  MyStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      StageName: Prod
+      Description: Prod Stage
+      ApiId: !Ref myAPIGateway
+
+  MyIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref myAPIGateway
+      Description: HTTP integration
+      IntegrationType: HTTP_PROXY
+      IntegrationMethod: ANY
+      IntegrationUri: 
+      PayloadFormatVersion: 1.0
+      RequestParameters:
+        "append:header.header1": "$context.requestId"
+      ResponseParameters:
+        "200":
+          ResponseParameters:
+            - Source: "headerValue"
+              Destination: "append:header.header2" 
+
+  MyRouteGet:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref myAPIGateway
+      RouteKey: 'GET /albums'
+      Target: !Join
+        - /
+        - - integrations
+          - !Ref MyIntegration
+  MyRoutePut:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref myAPIGateway
+      RouteKey: 'PUT /albums'
+      Target: !Join
+        - /
+        - - integrations
+          - !Ref MyIntegration
+  MyRouteGetID:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref myAPIGateway
+      RouteKey: 'GET /albums/{id}'
+      Target: !Join
+        - /
+        - - integrations
+          - !Ref MyIntegration
+  MyRouteDeleteD:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref myAPIGateway
+      RouteKey: 'DELETE /albums/{id}'
+      Target: !Join
+        - /
+        - - integrations
+          - !Ref MyIntegration
