@@ -1,0 +1,188 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: HTTP API Gateway with DynamoDB and Lambda functions
+Resources:
+
+  MyS3Bucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    Properties:
+      BucketName: dynamodb-bucket-yordan-target
+
+  MyAPIGateway:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: DynamoHTTPAPI
+      ProtocolType: HTTP
+
+  MyDynamoDBTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      AttributeDefinitions:
+        -
+          AttributeName: "id"
+          AttributeType: "S"
+      KeySchema:
+        -
+          AttributeName: "id"
+          KeyType: "HASH"
+      ProvisionedThroughput:
+        ReadCapacityUnits: "2"
+        WriteCapacityUnits: "2"
+      TimeToLiveSpecification:
+        AttributeName: "TTLAttribute"
+        Enabled: "True"
+      StreamSpecification:
+        StreamViewType: "NEW_AND_OLD_IMAGES"
+      TableName: ArtAlbums
+
+  MyLambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+        - Effect: "Allow"
+          Principal:
+            Service:
+            - lambda.amazonaws.com
+          Action:
+          - "sts:AssumeRole"
+      Path: "/"
+      # Create a policy attached to the role
+      # Allow Cloudwatch logging
+      Policies:
+      - PolicyName: "AllowLogging"
+        PolicyDocument:
+          Version: "2012-10-17"
+          Statement:
+          - Effect: "Allow"
+            Action:
+              - "dynamodb:DescribeStream"
+              - "dynamodb:GetRecords"
+              - "dynamodb:GetShardIterator"
+              - "dynamodb:ListStreams"
+              - "logs:CreateLogGroup"
+              - "logs:CreateLogStream"
+              - "logs:PutLogEvents"
+              - "s3:*"
+              - "s3-object-lambda:*"
+              - "dynamodb:DeleteItem"
+              - "dynamodb:GetItem"
+              - "dynamodb:PutItem"
+              - "dynamodb:Scan"
+              - "dynamodb:UpdateItem"
+              - "dynamodb:DeleteItem"
+              - "dynamodb:GetItem"
+              - "dynamodb:PutItem"
+              - "dynamodb:Scan"
+              - "dynamodb:UpdateItem"
+              - "logs:CreateLogStream"
+              - "logs:PutLogEvents"
+            Resource: "*"
+  MyLambdaExpiredDeletedDataFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: dynamodb_exp_data_function
+      Description: A function that saves expired or deleted data from DynamoDb
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Runtime: python3.9
+      Handler: index.lambda_handler
+      Code:
+        ZipFile:  |
+          import json
+          import boto3
+          import urllib.request as req
+
+
+          def lambda_handler(event, context):
+              bucket = "dynamodb-bucket-yordan-target"
+              filename = "dynamodb_expired_data.json"
+              result = []
+              for record in event['Records']:
+                  if record['eventName'] in ['REMOVE', 'MODIFY']:
+                      result.append(record)
+
+              s3 = boto3.resource('s3')
+              s3object = s3.Object(bucket, filename)
+
+              s3object.put(
+                  Body=(bytes(json.dumps(result).encode('UTF-8')))
+              )
+
+  MyLambdaCRUDFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: dynamodb_CRUD_function
+      Description: A function that saves expired or deleted data from DynamoDb
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Runtime: nodejs16.x
+      Handler: index.exports.handler
+      Code:
+        ZipFile:  |
+          const AWS = require("aws-sdk");
+          const dynamo = new AWS.DynamoDB.DocumentClient();
+          const tableName = "ArtAlbums"
+
+          exports.handler = async (event, context) => {
+            let body;
+            let statusCode = 200;
+            const headers = {
+              "Content-Type": "application/json"
+            };
+
+            try {
+              switch (event.routeKey) {
+                case "DELETE /albums/{id}":
+                  await dynamo
+                    .delete({
+                      TableName: tableName,
+                      Key: {
+                        id: event.pathParameters.id
+                      }
+                    })
+                    .promise();
+                  body = `Deleted item ${event.pathParameters.id}`;
+                  break;
+                case "GET /albums/{id}":
+                  body = await dynamo
+                    .get({
+                      TableName: tableName,
+                      Key: {
+                        id: event.pathParameters.id
+                      }
+                    })
+                    .promise();
+                  break;
+                case "GET /albums":
+                  body = await dynamo.scan({ TableName: tableName }).promise();
+                  break;
+                case "PUT /albums":
+                  let requestJSON = JSON.parse(event.body);
+                  await dynamo
+                    .put({
+                      TableName: tableName,
+                      Item: {
+                        id: requestJSON.id,
+                        price: requestJSON.price,
+                        name: requestJSON.name
+                      }
+                    })
+                    .promise();
+                  body = `Put item ${requestJSON.id}`;
+                  break;
+                default:
+                  throw new Error(`Unsupported route: "${event.routeKey}"`);
+              }
+            } catch (err) {
+              statusCode = 400;
+              body = err.message;
+            } finally {
+              body = JSON.stringify(body);
+            }
+
+            return {
+              statusCode,
+              body,
+              headers
+            };
+          };
